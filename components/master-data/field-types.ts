@@ -1,4 +1,11 @@
 // components/master-data/field-types.ts
+//
+// Versi ini MENAMBAHKAN tipe 'async-select' dan 'textarea' di atas versi
+// Phase 4 (semua tipe lama tetap ada, tidak ada yang dihapus) — timpa file
+// Phase 4 dengan file ini. 'async-select' dipakai untuk field seperti Sumber
+// Dana yang perlu opsi dari API tapi TIDAK bergantung pada field lain
+// (berbeda dari 'dependent-select' yang menunggu nilai field induk).
+
 export interface SelectOption {
   value: string;
   label: string;
@@ -6,6 +13,7 @@ export interface SelectOption {
 
 export type FieldDef =
   | { name: string; label: string; type: "text" | "number"; required?: boolean; placeholder?: string }
+  | { name: string; label: string; type: "textarea"; required?: boolean; placeholder?: string; rows?: number }
   | { name: string; label: string; type: "checkbox" }
   | {
       name: string;
@@ -17,13 +25,18 @@ export type FieldDef =
   | {
       name: string;
       label: string;
+      type: "async-select";
+      endpoint: string; // mis. '/api/master-data/sumber-dana'
+      optionLabelKey: string;
+      required?: boolean;
+    }
+  | {
+      name: string;
+      label: string;
       type: "dependent-select";
-      // Nama field lain di form ini yang menjadi induk (mis. 'program_id' untuk field 'kegiatan_id')
-      dependsOn: string;
-      // Endpoint master-data yang dipanggil untuk ambil opsi, mis. '/api/master-data/kegiatan'
-      // Filter otomatis lewat query param = parentFilterColumn (lihat entityEndpoint config)
+      dependsOn: string; // nama field lain di form ini yang menjadi induk
       endpoint: string;
-      parentQueryParam: string; // mis. 'program_id'
-      optionLabelKey: string; // kolom yang dipakai sebagai label opsi, mis. 'nama'
+      parentQueryParam: string;
+      optionLabelKey: string;
       required?: boolean;
     };

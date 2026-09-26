@@ -1,13 +1,6 @@
 {
-  "_comment": "Tambahkan dependency berikut ke package.json project Next.js SIPANDA yang sudah ada (bukan package.json baru/terpisah) — jalankan `npm install` setelah menggabungkan.",
+  "_comment": "Tambahkan ke package.json project (gabungkan dengan dependency Phase 3). Jalankan npm install setelah digabung.",
   "dependencies": {
-    "argon2": "^0.41.1",
-    "jose": "^5.9.6",
-    "postgres": "^3.4.5",
-    "@supabase/supabase-js": "^2.45.4",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "tsx": "^4.19.1"
+    "xlsx": "^0.18.5"
   }
 }

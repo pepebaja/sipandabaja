@@ -1,9 +1,15 @@
 "use client";
 
 // components/master-data/MasterDataForm.tsx
+//
+// Versi Phase 5: menambahkan dukungan 'async-select' dan 'textarea' di atas
+// versi Phase 4 — timpa file lama dengan ini (semua perilaku lama tetap
+// sama persis untuk tipe text/number/checkbox/select/dependent-select).
+
 import { useState } from "react";
 import type { FieldDef } from "./field-types";
 import { DependentSelect } from "./DependentSelect";
+import { AsyncSelect } from "./AsyncSelect";
 
 export function MasterDataForm({
   fields,
@@ -55,6 +61,25 @@ export function MasterDataForm({
           );
         }
 
+        if (field.type === "textarea") {
+          return (
+            <div key={field.name}>
+              <label className="mb-1.5 block text-sm font-medium text-slate-200">
+                {field.label}
+                {field.required && <span className="text-red-400"> *</span>}
+              </label>
+              <textarea
+                required={field.required}
+                placeholder={field.placeholder}
+                rows={field.rows ?? 3}
+                value={(value as string | undefined) ?? ""}
+                onChange={(e) => setField(field.name, e.target.value)}
+                className="w-full rounded-lg border border-slate-600 bg-[#0B1E3D] px-3 py-2 text-sm text-white outline-none focus:border-[#3FD8FF]"
+              />
+            </div>
+          );
+        }
+
         if (field.type === "checkbox") {
           return (
             <label key={field.name} className="flex items-center gap-2 text-sm text-slate-200">
@@ -90,6 +115,20 @@ export function MasterDataForm({
                 ))}
               </select>
             </div>
+          );
+        }
+
+        if (field.type === "async-select") {
+          return (
+            <AsyncSelect
+              key={field.name}
+              label={field.label}
+              value={(value as string | undefined) ?? ""}
+              onChange={(v) => setField(field.name, v)}
+              endpoint={field.endpoint}
+              optionLabelKey={field.optionLabelKey}
+              required={field.required}
+            />
           );
         }
 
