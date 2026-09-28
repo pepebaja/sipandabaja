@@ -1,8 +1,9 @@
 // lib/auth/session.ts
 //
-// Wrapper cookie httpOnly untuk session token. Dipakai dari Route Handler /
-// Server Action (bukan dari Client Component — cookie httpOnly memang
-// sengaja tidak bisa dibaca lewat JavaScript di browser).
+// PERBAIKAN (hotfix): SESSION_COOKIE_NAME sekarang berasal dari
+// lib/auth/constants.ts (tanpa dependency) dan di-re-export di sini agar
+// kode lain yang sudah mengimpor `SESSION_COOKIE_NAME` dari file ini tetap
+// berfungsi tanpa perubahan.
 
 import { cookies } from "next/headers";
 import {
@@ -10,8 +11,9 @@ import {
   verifySessionToken,
   type SipandaSessionClaims,
 } from "./jwt";
+import { SESSION_COOKIE_NAME } from "./constants";
 
-export const SESSION_COOKIE_NAME = "sipanda_session";
+export { SESSION_COOKIE_NAME };
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -22,10 +24,10 @@ export async function createSession(
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isProduction, // wajib true di production (HTTPS only)
-    sameSite: "strict", // mitigasi CSRF: cookie tidak dikirim pada request lintas-situs
+    secure: isProduction,
+    sameSite: "strict",
     path: "/",
-    maxAge: 60 * 60 * 8, // batas atas cookie browser; expiry sesungguhnya dikontrol oleh JWT exp
+    maxAge: 60 * 60 * 8,
   });
 }
 
@@ -41,13 +43,6 @@ export async function clearSession() {
   cookieStore.delete(SESSION_COOKIE_NAME);
 }
 
-/**
- * Dipakai di Server Component/Route Handler untuk mewajibkan login.
- * Lempar redirect ke /login bila sesi tidak valid — panggil di setiap
- * halaman/route yang butuh autentikasi sebagai lapisan kedua selain
- * middleware.ts (defense-in-depth, konsisten dengan prinsip "validasi
- * permission di server, bukan hanya sembunyikan tombol di frontend").
- */
 export async function requireSession() {
   const claims = await getSessionClaims();
   if (!claims) {

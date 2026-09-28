@@ -1,40 +1,46 @@
-# SIPANDA — Phase 5: DPA
+# SIPANDA — Hotfix: 500 MIDDLEWARE_INVOCATION_FAILED
 
-## Prasyarat
-- Phase 2–4 (migrasi 001–013) sudah dijalankan, project Phase 3 & 4 sudah tergabung.
-- Tambahkan dependency `xlsx` (lihat `package.additions.json`) → `npm install`.
-- **Timpa** file berikut dari Phase 4 dengan versi di paket ini (superset additive, tidak menghapus perilaku lama):
-  - `components/master-data/field-types.ts` (+ tipe `async-select`, `textarea`)
-  - `components/master-data/MasterDataForm.tsx` (dukungan tipe baru di atas)
-  - Ini juga sekaligus merapikan keterbatasan MVP Phase 4 (field Tahun Anggaran di form Program bisa dipindah ke `async-select` bila diinginkan — lihat catatan di README Phase 4).
+## Penyebab
+Screenshot menunjukkan `500 MIDDLEWARE_INVOCATION_FAILED` saat mengakses
+`https://sipandabaja.vercel.app/`. Ada dua penyebab di kode Phase 3 yang
+saya kirim sebelumnya:
 
-## Yang Dibangun
+1. **`lib/auth/jwt.ts` melempar `throw new Error(...)` di level modul**
+   ketika `SESSION_SECRET` belum diset di environment variable. Karena
+   `middleware.ts` meng-import file ini dan berjalan di **Edge Runtime**,
+   modul yang gagal di-load membuat **setiap request** (termasuk halaman
+   publik seperti `/`) gagal total dengan error 500 — persis seperti pada
+   screenshot.
+2. `SESSION_COOKIE_NAME` sebelumnya diimpor middleware dari
+   `lib/auth/session.ts`, yang turut menyeret `next/headers` — modul yang
+   tidak selalu aman dibundel ke Edge Runtime.
 
-### 1. CRUD DPA (`app/api/dpa/`)
-- `GET /api/dpa` — list dengan filter `tahun_anggaran_id`, `tahapan_anggaran_id`, `sub_kegiatan_id`, `status`, pencarian `q`, join ke Program/Kegiatan/Sub Kegiatan/Belanja/Sumber Dana untuk ditampilkan.
-- `POST /api/dpa` — buat baris DPA baru (dependent chain Program→Kegiatan→Sub Kegiatan→Belanja di form), dengan validasi server bahwa `belanja_id` benar berada di bawah `sub_kegiatan_id` yang dikirim.
-- `PUT /api/dpa/[id]` — **sengaja membatasi** field yang bisa diubah: `uraian_belanja`, `sumber_dana_id`, `keterangan`, `status`. **`pagu_anggaran` TIDAK BISA diedit lewat endpoint ini** — perubahan nilai wajib lewat alur Revisi (lihat bawah), sesuai business rule #6 di dokumen spesifikasi ("jangan overwrite data historis").
-- `DELETE /api/dpa/[id]` — soft delete (`status = 'DIARSIPKAN'`), bukan hapus fisik.
+## Perbaikan
+- **`lib/auth/constants.ts`** (baru) — cuma berisi `SESSION_COOKIE_NAME`, nol dependency, aman diimpor dari Edge.
+- **`lib/auth/jwt.ts`** — tidak lagi throw di level modul. `verifySessionToken()` sekarang **selalu** mengembalikan `null` jika terjadi masalah apa pun (termasuk secret belum diset), diperlakukan middleware sebagai "belum login" → redirect ke `/login`, bukan 500.
+- **`lib/auth/session.ts`** — mengimpor `SESSION_COOKIE_NAME` dari `constants.ts` (re-export, jadi kode lain yang sudah memakainya tidak perlu diubah).
+- **`middleware.ts`** — mengimpor `SESSION_COOKIE_NAME` langsung dari `constants.ts`, dan seluruh isinya dibungkus `try/catch` sebagai lapisan pertahanan terakhir: error tak terduga apa pun akan redirect ke `/login`, tidak pernah menampilkan halaman error 500 ke pengguna.
 
-### 2. Revisi/Versioning (`app/api/dpa/revisi/route.ts`) — inti Phase 5
-Mengimplementasikan STEP I dokumen spesifikasi:
-- Tidak pernah `UPDATE` baris `dpa` milik tahapan yang sudah lewat.
-- Membuat baris `dpa` **baru** untuk tahapan tujuan (atau memperbarui baris tujuan jika revisi kedua di tahapan yang sama — mis. dua kali revisi dalam satu tahap PERUBAHAN), lalu mencatat `dpa_revision` yang menautkan pagu_sebelum/pagu_sesudah/selisih (selisih dihitung generated column di database).
-- Satu transaksi atomik lewat `withAuditContext`.
-- UI: tombol **"Revisi"** di setiap baris tabel DPA → `RevisiModal` menampilkan pagu saat ini, pilih Tahapan Tujuan, input Pagu Baru (dengan indikator selisih real-time), Jenis Perubahan, dan Catatan.
+## Langkah yang Wajib Dilakukan di Vercel
+Perbaikan kode di atas mencegah crash, tapi **login tetap tidak akan
+berfungsi** sampai environment variable berikut benar-benar diset di
+**Vercel → Project Settings → Environment Variables** (untuk environment
+Production, dan Preview bila dipakai):
 
-### 3. Riwayat Perubahan Anggaran (`/dpa/riwayat`)
-Tabel read-only dari `dpa_revision` — Tanggal, Sub Kegiatan/Belanja, Tahapan Asal→Tujuan, Pagu Sebelum/Sesudah/Selisih, User, Catatan. Difilter per Tahun Anggaran.
+- `SESSION_SECRET` — string acak, **minimal 32 karakter**. Generate dengan:
+  ```bash
+  openssl rand -base64 48
+  ```
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` (lihat `.env.example` dari paket Phase 3) juga harus sudah diset, atau endpoint API akan gagal dengan pesan error yang jelas (bukan lagi meruntuhkan middleware).
 
-### 4. Import DPA (`/dpa/import`) — alur Section R
-Upload → Validasi → **Preview** → Cek Error → Konfirmasi → Import, dipisah dua endpoint:
-- `POST /api/dpa/import/preview` — parse file (`.xlsx`/`.xls`/`.csv` via `xlsx`/SheetJS), menelusuri hierarki Kode Program→Kegiatan→Sub Kegiatan→Kode Rekening untuk tiap baris, mengembalikan daftar baris **tanpa menulis apa pun ke database**. Pesan error mengikuti format spesifikasi, mis. *"Baris 27: Kode Sub Kegiatan belum diisi."*
-- `POST /api/dpa/import/commit` — menerima HANYA baris yang sudah lolos validasi (dipilih otomatis oleh UI, baris error tidak pernah dikirim), insert dalam satu transaksi, mencatat `audit_logs` dengan action `IMPORT` dan jumlah baris.
-- Duplikat (kombinasi tahun+tahapan+belanja yang sudah ada) ditandai error dengan pesan yang mengarahkan pengguna ke menu **Revisi**, bukan menimpa data lewat import ulang.
+Setelah env var diset, **redeploy** (env var baru di Vercel tidak otomatis berlaku ke deployment yang sudah berjalan — perlu trigger deployment ulang).
 
-Kolom template file: `Kode Program | Kode Kegiatan | Kode Sub Kegiatan | Kode Rekening | Uraian Belanja | Pagu Anggaran | Sumber Dana | Keterangan`.
-
-## Keterbatasan yang Disadari (MVP Phase 5)
-- Import belum menyediakan tombol "Unduh Template Excel" — bisa ditambahkan cepat di Phase 11 (Import/Export) dengan menuliskan header di atas sebagai file `.xlsx` kosong.
-- `RevisiModal` mengasumsikan `sumber_dana_id` tidak berubah saat revisi murni perubahan pagu; untuk jenis perubahan `PERUBAHAN_SUMBER_DANA`, form saat ini belum menampilkan selector Sumber Dana baru secara terpisah — field ini bisa ditambahkan mengikuti pola `AsyncSelect` yang sudah ada.
-- Validasi bisnis "total pagu paket RUP tidak melebihi pagu DPA terkait" (Section I) baru relevan begitu modul RUP (Phase 6) dibangun — belum ditegakkan di Phase 5 karena belum ada data RUP untuk dibandingkan.
+## Cara Menerapkan
+Timpa 4 file berikut di project dengan isi dari paket ini:
+```
+lib/auth/constants.ts   (baru)
+lib/auth/jwt.ts
+lib/auth/session.ts
+middleware.ts
+```
+Tidak ada file lain yang perlu diubah — perubahan ini murni perbaikan pada lapisan sesi/middleware, tidak menyentuh logika bisnis modul manapun.
