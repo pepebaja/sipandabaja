@@ -1,46 +1,38 @@
-# SIPANDA — Hotfix: 500 MIDDLEWARE_INVOCATION_FAILED
+# SIPANDA — Phase 6: RUP
 
-## Penyebab
-Screenshot menunjukkan `500 MIDDLEWARE_INVOCATION_FAILED` saat mengakses
-`https://sipandabaja.vercel.app/`. Ada dua penyebab di kode Phase 3 yang
-saya kirim sebelumnya:
+## Prasyarat
+- Phase 2–5 (migrasi 001–013) sudah dijalankan; project Phase 3–5 sudah tergabung.
+- Jalankan `supabase/migrations/014_konfigurasi_validasi_rup.sql` (tabel konfigurasi validasi pagu).
+- **Timpa** `app/api/dpa/route.ts` dengan versi di paket ini (superset additive dari Phase 5: hanya menambah filter `belanja_id`).
+- Tidak ada dependency baru (memakai `xlsx` dari Phase 5).
+- Hotfix middleware (`sipanda-hotfix-middleware.zip`) tetap perlu diterapkan terlebih dulu bila error 500 di Vercel belum teratasi.
 
-1. **`lib/auth/jwt.ts` melempar `throw new Error(...)` di level modul**
-   ketika `SESSION_SECRET` belum diset di environment variable. Karena
-   `middleware.ts` meng-import file ini dan berjalan di **Edge Runtime**,
-   modul yang gagal di-load membuat **setiap request** (termasuk halaman
-   publik seperti `/`) gagal total dengan error 500 — persis seperti pada
-   screenshot.
-2. `SESSION_COOKIE_NAME` sebelumnya diimpor middleware dari
-   `lib/auth/session.ts`, yang turut menyeret `next/headers` — modul yang
-   tidak selalu aman dibundel ke Edge Runtime.
+## Yang Dibangun
 
-## Perbaikan
-- **`lib/auth/constants.ts`** (baru) — cuma berisi `SESSION_COOKIE_NAME`, nol dependency, aman diimpor dari Edge.
-- **`lib/auth/jwt.ts`** — tidak lagi throw di level modul. `verifySessionToken()` sekarang **selalu** mengembalikan `null` jika terjadi masalah apa pun (termasuk secret belum diset), diperlakukan middleware sebagai "belum login" → redirect ke `/login`, bukan 500.
-- **`lib/auth/session.ts`** — mengimpor `SESSION_COOKIE_NAME` dari `constants.ts` (re-export, jadi kode lain yang sudah memakainya tidak perlu diubah).
-- **`middleware.ts`** — mengimpor `SESSION_COOKIE_NAME` langsung dari `constants.ts`, dan seluruh isinya dibungkus `try/catch` sebagai lapisan pertahanan terakhir: error tak terduga apa pun akan redirect ke `/login`, tidak pernah menampilkan halaman error 500 ke pengguna.
+### 1. CRUD RUP (`/api/rup`, `/api/rup/[id]`)
+- **RUP Penyedia dan RUP Swakelola** adalah satu tabel (`rup.jenis_rup`), ditampilkan lewat tab dan halaman terpisah: `/rup`, `/rup/penyedia`, `/rup/swakelola`.
+- `POST /api/rup` melakukan dua hal dalam satu transaksi: (1) validasi pagu terhadap DPA, (2) insert `rup` **dan** otomatis membuat baris `paket_pengadaan` pendamping dengan status awal `RUP`. Dengan begitu view rekap dari migrasi 010 (`v_rekap_rup_vs_realisasi`, `v_rekap_metode_pemilihan`) langsung mencakup setiap paket, dan Phase 7 tinggal mengubah statusnya.
+- `PUT /api/rup/[id]` mencatat **setiap field yang berubah** ke `rup_revision` (nilai sebelum/sesudah, user). Berbeda dari DPA yang membuat baris baru per tahapan: satu baris RUP mewakili satu paket yang berkembang, jadi cukup dicatat diff per field.
+- `DELETE` = arsip (`status_rup = DIARSIPKAN`, `status_aktif = false`); paket yang diarsipkan tidak lagi dihitung sebagai pemakai pagu DPA.
 
-## Langkah yang Wajib Dilakukan di Vercel
-Perbaikan kode di atas mencegah crash, tapi **login tetap tidak akan
-berfungsi** sampai environment variable berikut benar-benar diset di
-**Vercel → Project Settings → Environment Variables** (untuk environment
-Production, dan Preview bila dipakai):
+### 2. Relasi ke DPA dan validasi pagu (yang sebelumnya belum ditegakkan)
+- `lib/rup/pagu-check.ts`: total pagu paket RUP aktif pada satu baris DPA dibandingkan dengan `dpa.pagu_anggaran`.
+- **Configurable** lewat tabel `konfigurasi_validasi_rup`: `blokir_pagu_rup_melebihi_dpa` (default `true` = tolak) dan `toleransi_persen` (default 0). Bila blokir dimatikan, melebihi pagu hanya memunculkan peringatan (toast) tetapi data tetap tersimpan, sesuai catatan spesifikasi bahwa aturan bisnis tidak boleh terlalu kaku.
+- Saat **edit**, RUP itu sendiri dikecualikan dari total yang terpakai agar tidak terhitung ganda.
+- `GET /api/rup/dpa-lookup`: dari pilihan Program→Kegiatan→Sub Kegiatan→Belanja, mencari DPA yang cocok dan mengembalikan pagu, total terpakai, dan **sisa pagu**; form RUP menampilkannya dan memberi peringatan langsung saat pagu paket melebihi sisa. Ini hanya kenyamanan di UI; penegakan sesungguhnya di server.
+- Penyimpanan tanpa DPA yang cocok ditolak: tombol Simpan nonaktif sampai DPA ditemukan.
 
-- `SESSION_SECRET` — string acak, **minimal 32 karakter**. Generate dengan:
-  ```bash
-  openssl rand -base64 48
-  ```
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` (lihat `.env.example` dari paket Phase 3) juga harus sudah diset, atau endpoint API akan gagal dengan pesan error yang jelas (bukan lagi meruntuhkan middleware).
+### 3. Import RUP (`/rup/import`)
+Alur Upload → Validasi → Preview → Cek Error → Konfirmasi → Import, sama seperti DPA.
+- Preview menelusuri Kode Program→Kegiatan→Sub Kegiatan→Kode Rekening ke baris DPA, memeriksa Kode RUP unik (Tahun+Tahapan), kode Jenis/Metode Pengadaan, Sumber Dana, dan pagu per baris.
+- **Commit menghitung ulang pagu secara kumulatif per DPA** dan menolak duplikat Kode RUP di dalam file, karena beberapa baris dapat merujuk DPA yang sama dan lolos sendiri-sendiri padahal totalnya melebihi pagu. Jika ada pelanggaran, tidak ada data yang tersimpan sama sekali (atomik).
+- Audit log `IMPORT` dengan jumlah baris.
 
-Setelah env var diset, **redeploy** (env var baru di Vercel tidak otomatis berlaku ke deployment yang sudah berjalan — perlu trigger deployment ulang).
+### 4. Monitoring RUP (`/rup/monitoring`)
+KPI: total paket dan pagu, RUP Penyedia vs Swakelola, E-Katalog vs Non E-Katalog (jumlah, nominal, persentase dengan guard pembagian nol), serta sebaran paket per status.
 
-## Cara Menerapkan
-Timpa 4 file berikut di project dengan isi dari paket ini:
-```
-lib/auth/constants.ts   (baru)
-lib/auth/jwt.ts
-lib/auth/session.ts
-middleware.ts
-```
-Tidak ada file lain yang perlu diubah — perubahan ini murni perbaikan pada lapisan sesi/middleware, tidak menyentuh logika bisnis modul manapun.
+## Keterbatasan yang Disadari
+- Preview import memvalidasi pagu per baris terhadap kondisi database saat itu; pelanggaran kumulatif baru terdeteksi saat commit (bukan di tabel preview). Bisa dipindah ke preview bila dibutuhkan.
+- Pengaturan `konfigurasi_validasi_rup` belum punya halaman UI (menyusul di Phase Pengaturan); sementara diubah lewat SQL, mis. `update konfigurasi_validasi_rup set blokir_pagu_rup_melebihi_dpa = false;`.
+- Perubahan RUP antar tahapan (Murni→Pergeseran→Perubahan) saat ini terekam sebagai edit per field pada baris yang sama dan RUP dikaitkan ke satu `dpa_id`. Menyalin paket RUP ke tahapan berikutnya (mirip alur Revisi DPA) belum dibuat.
+- Riwayat `rup_revision` sudah tercatat tetapi belum ada halaman untuk menampilkannya.

@@ -1,4 +1,9 @@
 // app/api/dpa/route.ts
+//
+// PEMBARUAN Phase 6 (additive terhadap Phase 5): menambahkan filter
+// `belanja_id` pada GET, dipakai oleh /api/rup/dpa-lookup dan form RUP.
+// Timpa file Phase 5 dengan versi ini — tidak ada perilaku lama yang hilang.
+
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, requirePermission, authErrorResponse } from "@/lib/auth/rbac";
 import { supabaseAdmin } from "@/lib/db/supabase-admin";
@@ -31,6 +36,7 @@ export async function GET(req: NextRequest) {
     const tahunId = url.searchParams.get("tahun_anggaran_id");
     const tahapanId = url.searchParams.get("tahapan_anggaran_id");
     const subKegiatanId = url.searchParams.get("sub_kegiatan_id");
+    const belanjaId = url.searchParams.get("belanja_id"); // baru di Phase 6
     const status = url.searchParams.get("status");
     const sortBy = url.searchParams.get("sortBy") ?? "created_at";
     const sortDir = url.searchParams.get("sortDir") === "asc";
@@ -46,6 +52,7 @@ export async function GET(req: NextRequest) {
     if (tahunId) query = query.eq("tahun_anggaran_id", tahunId);
     if (tahapanId) query = query.eq("tahapan_anggaran_id", tahapanId);
     if (subKegiatanId) query = query.eq("sub_kegiatan_id", subKegiatanId);
+    if (belanjaId) query = query.eq("belanja_id", belanjaId);
     if (status) query = query.eq("status", status);
     if (q) query = query.ilike("uraian_belanja", `%${q}%`);
 
@@ -80,20 +87,13 @@ export async function POST(req: NextRequest) {
     }
     const d = parsed.data;
 
-    // Validasi integritas relasi (defense-in-depth — form di frontend sudah
-    // memfilter lewat dependent-select, tapi server tidak boleh mempercayai
-    // input begitu saja): pastikan belanja_id benar berada di bawah
-    // sub_kegiatan_id yang dikirim.
     const { data: belanjaCheck } = await supabaseAdmin
       .from("belanja")
       .select("sub_kegiatan_id")
       .eq("id", d.belanja_id)
       .maybeSingle();
     if (!belanjaCheck || belanjaCheck.sub_kegiatan_id !== d.sub_kegiatan_id) {
-      return NextResponse.json(
-        { message: "Kombinasi Sub Kegiatan dan Belanja tidak valid." },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: "Kombinasi Sub Kegiatan dan Belanja tidak valid." }, { status: 400 });
     }
 
     const [row] = await withAuditContext(session.sub, ip, (tx) =>
